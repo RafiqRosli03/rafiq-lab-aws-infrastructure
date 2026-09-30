@@ -12,6 +12,20 @@ certificates used by CloudFront).
 
 ## Architecture
 
+### AWS standard diagram
+
+Built with [draw.io](https://www.drawio.com/) using the official AWS
+architecture icon set. Source file: [`architecture.drawio`](architecture.drawio)
+(open it at [app.diagrams.net](https://app.diagrams.net/) or in the draw.io
+desktop app to edit).
+
+![AWS Architecture Diagram](architecture.png)
+
+### Logical flow diagram
+
+A simplified, tool-agnostic view of the same architecture (renders inline on
+GitHub):
+
 ```mermaid
 flowchart TB
     subgraph Internet
@@ -180,5 +194,7 @@ lab-challenge/
 ├── 01-network.yaml       # VPC, subnets, NAT, routing
 ├── 02-compute.yaml       # Internal ALBs, ASGs, EC2, IAM
 ├── 03-cdn-waf.yaml       # CloudFront distributions + WAF
+├── architecture.drawio   # Editable AWS-standard architecture diagram (source)
+├── architecture.png      # Exported PNG of the diagram above
 └── README.md             # This file
 ```
