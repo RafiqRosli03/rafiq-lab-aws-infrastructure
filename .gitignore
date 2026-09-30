@@ -1,0 +1,18 @@
+# Credentials / secrets — never commit these
+*.pem
+*.key
+.env
+.env.*
+**/credentials
+**/deployment*lab*.txt
+aws-exports.js
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# CloudFormation change set / packaged artifacts
+.aws-sam/
+packaged-*.yaml

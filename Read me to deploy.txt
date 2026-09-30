@@ -1,0 +1,16 @@
+Open
+aws cloudformation deploy --stack-name rafiq-lab-network --template-file 01-network.yaml --region ap-southeast-5 --parameter-overrides EnvironmentName=rafiq-lab
+aws cloudformation deploy --stack-name rafiq-lab-compute --template-file 02-compute.yaml --region ap-southeast-5 --capabilities CAPABILITY_NAMED_IAM --parameter-overrides EnvironmentName=rafiq-lab
+aws cloudformation deploy --stack-name rafiq-lab-cdn-waf --template-file 03-cdn-waf.yaml --region us-east-1 --capabilities CAPABILITY_IAM --parameter-overrides EnvironmentName=rafiq-lab
+
+
+Close:
+aws cloudformation delete-stack --stack-name rafiq-lab-cdn-waf --region us-east-1
+aws cloudformation delete-stack --stack-name rafiq-lab-compute --region ap-southeast-5
+aws cloudformation delete-stack --stack-name rafiq-lab-network --region ap-southeast-5
+
+
+Check validation close
+aws cloudformation describe-stacks --stack-name rafiq-lab-cdn-waf --region us-east-1 --query "Stacks[0].StackStatus" --output text
+aws cloudformation describe-stacks --stack-name rafiq-lab-compute --region ap-southeast-5 --query "Stacks[0].StackStatus" --output text
+aws cloudformation describe-stacks --stack-name rafiq-lab-network --region ap-southeast-5 --query "Stacks[0].StackStatus" --output text

@@ -1,0 +1,216 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Rafiq Lab - CloudFront CDN + WAF with Maintenance Page'
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: rafiq-lab
+
+  ALBADnsName:
+    Type: String
+    Default: internal-rafiq-lab-alb-a-1553485088.ap-southeast-5.elb.amazonaws.com
+
+  ALBBDnsName:
+    Type: String
+    Default: internal-rafiq-lab-alb-b-832194863.ap-southeast-5.elb.amazonaws.com
+
+  ALBAArnValue:
+    Type: String
+    Default: arn:aws:elasticloadbalancing:ap-southeast-5:497862079645:loadbalancer/app/rafiq-lab-alb-a/ce8482ce0cbfaa00
+
+  ALBBArnValue:
+    Type: String
+    Default: arn:aws:elasticloadbalancing:ap-southeast-5:497862079645:loadbalancer/app/rafiq-lab-alb-b/da1c1ba1b7eb042c
+
+  ACMCertificateArn:
+    Type: String
+    Default: arn:aws:acm:us-east-1:497862079645:certificate/7a546f7c-41e9-42b7-832c-e0e4b061871e
+
+  OfficeIP:
+    Type: String
+    Default: 219.92.12.153
+
+Resources:
+  # ========== WAF IP SET ==========
+  OfficeIPSet:
+    Type: AWS::WAFv2::IPSet
+    Properties:
+      Name: !Sub "${EnvironmentName}-office-ip"
+      Scope: CLOUDFRONT
+      IPAddressVersion: IPV4
+      Addresses:
+        - !Sub "${OfficeIP}/32"
+
+  # ========== WAF WEB ACL ==========
+  WAFWebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub "${EnvironmentName}-waf"
+      Scope: CLOUDFRONT
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub "${EnvironmentName}-waf-metric"
+      CustomResponseBodies:
+        MaintenancePage:
+          ContentType: TEXT_HTML
+          Content: |
+            <!DOCTYPE html>
+            <html>
+            <head><title>Maintenance - rafiq-a.stg-nexadata.net</title></head>
+            <body style="background:#f44336;color:white;text-align:center;padding:80px;font-family:Arial;">
+            <h1>Scheduled Maintenance</h1>
+            <h2>rafiq-a.stg-nexadata.net is currently under maintenance</h2>
+            <p>We are performing scheduled updates. Please try again later.</p>
+            <p style="margin-top:40px;font-size:12px;">Contact administrator if you believe this is an error.</p>
+            </body>
+            </html>
+      Rules:
+        - Name: maintenance-block-office-ip
+          Priority: 1
+          Statement:
+            AndStatement:
+              Statements:
+                - IPSetReferenceStatement:
+                    Arn: !GetAtt OfficeIPSet.Arn
+                - ByteMatchStatement:
+                    SearchString: rafiq-a.stg-nexadata.net
+                    FieldToMatch:
+                      SingleHeader:
+                        Name: host
+                    TextTransformations:
+                      - Priority: 0
+                        Type: LOWERCASE
+                    PositionalConstraint: CONTAINS
+          Action:
+            Block:
+              CustomResponse:
+                ResponseCode: 503
+                CustomResponseBodyKey: MaintenancePage
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: maintenance-rule-metric
+
+  # ========== VPC ORIGIN A ==========
+  VpcOriginA:
+    Type: AWS::CloudFront::VpcOrigin
+    Properties:
+      VpcOriginEndpointConfig:
+        Name: !Sub "${EnvironmentName}-vpc-origin-a"
+        Arn: !Ref ALBAArnValue
+        HTTPPort: 80
+        HTTPSPort: 443
+        OriginProtocolPolicy: http-only
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-vpc-origin-a"
+
+  # ========== VPC ORIGIN B ==========
+  VpcOriginB:
+    Type: AWS::CloudFront::VpcOrigin
+    Properties:
+      VpcOriginEndpointConfig:
+        Name: !Sub "${EnvironmentName}-vpc-origin-b"
+        Arn: !Ref ALBBArnValue
+        HTTPPort: 80
+        HTTPSPort: 443
+        OriginProtocolPolicy: http-only
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-vpc-origin-b"
+
+  # ========== CLOUDFRONT DISTRIBUTION A ==========
+  CloudFrontDistributionA:
+    Type: AWS::CloudFront::Distribution
+    DependsOn: VpcOriginA
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "${EnvironmentName} - App A (rafiq-a)"
+        Aliases:
+          - rafiq-a.stg-nexadata.net
+        ViewerCertificate:
+          AcmCertificateArn: !Ref ACMCertificateArn
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+        WebACLId: !GetAtt WAFWebACL.Arn
+        DefaultCacheBehavior:
+          TargetOriginId: alb-a-origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+            - PUT
+            - POST
+            - PATCH
+            - DELETE
+          CachedMethods:
+            - GET
+            - HEAD
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+          OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3
+        Origins:
+          - Id: alb-a-origin
+            DomainName: !Ref ALBADnsName
+            VpcOriginConfig:
+              VpcOriginId: !GetAtt VpcOriginA.Id
+              OriginReadTimeout: 30
+              OriginKeepaliveTimeout: 5
+        HttpVersion: http2
+
+  # ========== CLOUDFRONT DISTRIBUTION B ==========
+  CloudFrontDistributionB:
+    Type: AWS::CloudFront::Distribution
+    DependsOn: VpcOriginB
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "${EnvironmentName} - App B (rafiq-b)"
+        Aliases:
+          - rafiq-b.stg-nexadata.net
+        ViewerCertificate:
+          AcmCertificateArn: !Ref ACMCertificateArn
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+        WebACLId: !GetAtt WAFWebACL.Arn
+        DefaultCacheBehavior:
+          TargetOriginId: alb-b-origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+            - PUT
+            - POST
+            - PATCH
+            - DELETE
+          CachedMethods:
+            - GET
+            - HEAD
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+          OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3
+        Origins:
+          - Id: alb-b-origin
+            DomainName: !Ref ALBBDnsName
+            VpcOriginConfig:
+              VpcOriginId: !GetAtt VpcOriginB.Id
+              OriginReadTimeout: 30
+              OriginKeepaliveTimeout: 5
+        HttpVersion: http2
+
+Outputs:
+  CloudFrontDomainA:
+    Value: !GetAtt CloudFrontDistributionA.DomainName
+    Description: CloudFront domain for rafiq-a
+
+  CloudFrontDomainB:
+    Value: !GetAtt CloudFrontDistributionB.DomainName
+    Description: CloudFront domain for rafiq-b
+
+  WAFWebACLArn:
+    Value: !GetAtt WAFWebACL.Arn
+    Description: WAF WebACL ARN

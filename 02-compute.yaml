@@ -1,0 +1,317 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Rafiq Lab - Compute Stack (Private ALBs, ASGs, EC2)'
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: rafiq-lab
+
+  ACMCertificateArn:
+    Type: String
+    Default: arn:aws:acm:ap-southeast-5:497862079645:certificate/7f8372f5-1577-41d5-bf50-0ea372893f95
+
+  InstanceType:
+    Type: String
+    Default: t3.micro
+
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64'
+
+Resources:
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow traffic to Private ALBs
+      VpcId:
+        Fn::ImportValue: !Sub "${EnvironmentName}-VpcId"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 10.0.0.0/16
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 10.0.0.0/16
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-alb-sg"
+
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow traffic from ALB only
+      VpcId:
+        Fn::ImportValue: !Sub "${EnvironmentName}-VpcId"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-ec2-sg"
+
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${EnvironmentName}-ec2-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref EC2Role
+
+  ALBA:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${EnvironmentName}-alb-a"
+      Scheme: internal
+      Type: application
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Subnets:
+        - Fn::ImportValue: !Sub "${EnvironmentName}-PrivateALBSubnetA"
+        - Fn::ImportValue: !Sub "${EnvironmentName}-PrivateALBSubnetB"
+        - Fn::ImportValue: !Sub "${EnvironmentName}-PrivateALBSubnetC"
+
+  TargetGroupA:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${EnvironmentName}-tg-a"
+      Port: 80
+      Protocol: HTTP
+      VpcId:
+        Fn::ImportValue: !Sub "${EnvironmentName}-VpcId"
+      TargetType: instance
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+
+  ALBAListenerHTTP:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALBA
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroupA
+
+  ALBAListenerHTTPS:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALBA
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref ACMCertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroupA
+
+  ALBB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${EnvironmentName}-alb-b"
+      Scheme: internal
+      Type: application
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Subnets:
+        - Fn::ImportValue: !Sub "${EnvironmentName}-PrivateALBSubnetA"
+        - Fn::ImportValue: !Sub "${EnvironmentName}-PrivateALBSubnetB"
+        - Fn::ImportValue: !Sub "${EnvironmentName}-PrivateALBSubnetC"
+
+  TargetGroupB:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${EnvironmentName}-tg-b"
+      Port: 80
+      Protocol: HTTP
+      VpcId:
+        Fn::ImportValue: !Sub "${EnvironmentName}-VpcId"
+      TargetType: instance
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+
+  ALBBListenerHTTP:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALBB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroupB
+
+  ALBBListenerHTTPS:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALBB
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref ACMCertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroupB
+
+  LaunchTemplateA:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub "${EnvironmentName}-lt-a"
+      LaunchTemplateData:
+        ImageId: !Ref LatestAmiId
+        InstanceType: !Ref InstanceType
+        IamInstanceProfile:
+          Arn: !GetAtt EC2InstanceProfile.Arn
+        SecurityGroupIds:
+          - !Ref EC2SecurityGroup
+        UserData:
+          Fn::Base64: |
+            #!/bin/bash
+            yum update -y
+            yum install -y httpd
+            systemctl start httpd
+            systemctl enable httpd
+            TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+            INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
+            AZ=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/availability-zone)
+            cat <<EOF > /var/www/html/index.html
+            <!DOCTYPE html>
+            <html>
+            <head><title>App A - Rafiq</title></head>
+            <body style="background:#1a73e8;color:white;text-align:center;padding:50px;font-family:Arial;">
+            <h1>Application A</h1>
+            <h2>rafiq-a.stg-nexadata.net</h2>
+            <p>Instance: $INSTANCE_ID</p>
+            <p>AZ: $AZ</p>
+            </body>
+            </html>
+            EOF
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub "${EnvironmentName}-app-a"
+
+  LaunchTemplateB:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub "${EnvironmentName}-lt-b"
+      LaunchTemplateData:
+        ImageId: !Ref LatestAmiId
+        InstanceType: !Ref InstanceType
+        IamInstanceProfile:
+          Arn: !GetAtt EC2InstanceProfile.Arn
+        SecurityGroupIds:
+          - !Ref EC2SecurityGroup
+        UserData:
+          Fn::Base64: |
+            #!/bin/bash
+            yum update -y
+            yum install -y httpd
+            systemctl start httpd
+            systemctl enable httpd
+            TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+            INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
+            AZ=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/availability-zone)
+            cat <<EOF > /var/www/html/index.html
+            <!DOCTYPE html>
+            <html>
+            <head><title>App B - Rafiq</title></head>
+            <body style="background:#34a853;color:white;text-align:center;padding:50px;font-family:Arial;">
+            <h1>Application B</h1>
+            <h2>rafiq-b.stg-nexadata.net</h2>
+            <p>Instance: $INSTANCE_ID</p>
+            <p>AZ: $AZ</p>
+            </body>
+            </html>
+            EOF
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub "${EnvironmentName}-app-b"
+
+  AutoScalingGroupA:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub "${EnvironmentName}-asg-a"
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplateA
+        Version: !GetAtt LaunchTemplateA.LatestVersionNumber
+      MinSize: 2
+      MaxSize: 6
+      DesiredCapacity: 3
+      VPCZoneIdentifier:
+        - Fn::ImportValue: !Sub "${EnvironmentName}-PrivateAppSubnetA"
+        - Fn::ImportValue: !Sub "${EnvironmentName}-PrivateAppSubnetB"
+        - Fn::ImportValue: !Sub "${EnvironmentName}-PrivateAppSubnetC"
+      TargetGroupARNs:
+        - !Ref TargetGroupA
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 120
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-asg-a"
+          PropagateAtLaunch: true
+
+  AutoScalingGroupB:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub "${EnvironmentName}-asg-b"
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplateB
+        Version: !GetAtt LaunchTemplateB.LatestVersionNumber
+      MinSize: 2
+      MaxSize: 6
+      DesiredCapacity: 3
+      VPCZoneIdentifier:
+        - Fn::ImportValue: !Sub "${EnvironmentName}-PrivateAppSubnetA"
+        - Fn::ImportValue: !Sub "${EnvironmentName}-PrivateAppSubnetB"
+        - Fn::ImportValue: !Sub "${EnvironmentName}-PrivateAppSubnetC"
+      TargetGroupARNs:
+        - !Ref TargetGroupB
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 120
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-asg-b"
+          PropagateAtLaunch: true
+
+Outputs:
+  ALBADnsName:
+    Value: !GetAtt ALBA.DNSName
+    Export:
+      Name: !Sub "${EnvironmentName}-ALBA-DnsName"
+
+  ALBBDnsName:
+    Value: !GetAtt ALBB.DNSName
+    Export:
+      Name: !Sub "${EnvironmentName}-ALBB-DnsName"
+
+  ALBAArnOutput:
+    Value: !Ref ALBA
+    Export:
+      Name: !Sub "${EnvironmentName}-ALBA-Arn"
+
+  ALBBArnOutput:
+    Value: !Ref ALBB
+    Export:
+      Name: !Sub "${EnvironmentName}-ALBB-Arn"
